@@ -12,6 +12,7 @@ export interface User {
  * @param walletAddress - The connected wallet's public key as string
  * @returns Promise with the result
  */
+
 export async function saveWalletAddress(walletAddress: string) {
   try {
     // First checUserk if wallet address already exists
