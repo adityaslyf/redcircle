@@ -42,7 +42,7 @@ interface RedditResponse {
 
 class RedditAPI {
   constructor() {
-    // Client-side API now uses server-side route
+    // Client-side API now uses server-side route with user authentication
   }
 
   async fetchPostByUrl(url: string): Promise<RedditPost | null> {
@@ -52,15 +52,37 @@ class RedditAPI {
       return response.data.post;
     } catch (error: unknown) {
       console.error('Error fetching Reddit post:', error);
+      
       if (axios.isAxiosError(error) && error.response) {
-        throw new Error(error.response.data.error || 'Failed to fetch post');
+        const status = error.response.status;
+        const errorMessage = error.response.data.error;
+        
+        // Handle specific authentication errors
+        if (status === 401) {
+          if (errorMessage?.includes('Not authenticated')) {
+            throw new Error('Please log in with Reddit to fetch posts');
+          } else if (errorMessage?.includes('access token')) {
+            throw new Error('Reddit authentication expired. Please log in again');
+          } else {
+            throw new Error('Authentication required. Please log in with Reddit');
+          }
+        }
+        
+        // Handle other errors
+        throw new Error(errorMessage || 'Failed to fetch post');
       }
-      throw error;
+      
+      throw new Error('An unexpected error occurred while fetching the post');
     }
   }
 
   async fetchMultiplePosts(urls: string[]): Promise<(RedditPost | null)[]> {
-    const promises = urls.map(url => this.fetchPostByUrl(url));
+    const promises = urls.map(url => 
+      this.fetchPostByUrl(url).catch(error => {
+        console.error(`Failed to fetch post for URL ${url}:`, error);
+        return null; // Return null for failed requests
+      })
+    );
     return Promise.all(promises);
   }
 }

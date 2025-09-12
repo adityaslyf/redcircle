@@ -282,7 +282,10 @@ export default function RedditFormPage() {
                 )}
               </Button>
               {!isRedditAuthenticated && (
-                <p className="text-xs text-red-600 mt-2">You must be logged in with Reddit to submit a URL.</p>
+                <div className="text-xs text-red-600 mt-2 p-3 bg-red-50 rounded-lg border border-red-200">
+                  <p className="font-semibold">Reddit Authentication Required</p>
+                  <p className="mt-1">You must be logged in with Reddit to submit URLs and access post data. Click "Login with Reddit" above to authenticate.</p>
+                </div>
               )}
             </form>
           </CardContent>

@@ -1,5 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server'
 import axios from 'axios'
+import { getServerSession } from "next-auth/next"
+import NextAuth from "next-auth";
+import RedditProvider from "next-auth/providers/reddit";
+
+// Import the NextAuth handler to get the configuration
+const authOptions = {
+  providers: [
+    RedditProvider({
+      clientId: process.env.REDDIT_CLIENT_ID!,
+      clientSecret: process.env.REDDIT_CLIENT_SECRET!,
+      authorization: {
+        params: { 
+          duration: "permanent",
+          scope: "read identity submit"
+        },
+      },
+    }),
+  ],
+  secret: process.env.NEXTAUTH_SECRET,
+  callbacks: {
+    async jwt({ token, account }: any) {
+      if (account) {
+        token.accessToken = account.access_token;
+        token.refreshToken = account.refresh_token;
+        token.provider = account.provider;
+      }
+      return token;
+    },
+    async session({ session, token }: any) {
+      session.accessToken = token.accessToken as string;
+      session.refreshToken = token.refreshToken as string;
+      session.provider = token.provider as string;
+      return session;
+    },
+  },
+};
 
 interface RedditPost {
   id: string;
@@ -18,45 +54,10 @@ interface RedditPost {
 }
 
 class RedditAPI {
-  private clientId: string;
-  private clientSecret: string;
-  private accessToken: string | null = null;
-  private tokenExpiry: number = 0;
+  private userAccessToken: string;
 
-  constructor() {
-    this.clientId = process.env.REDDIT_CLIENT_ID||"";
-    this.clientSecret = process.env.REDDIT_CLIENT_SECRET || "";
-  }
-
-  private async getAccessToken(): Promise<string> {
-    if (this.accessToken && Date.now() < this.tokenExpiry) {
-      return this.accessToken;
-    }
-
-    try {
-      const response = await axios.post('https://www.reddit.com/api/v1/access_token', 
-        'grant_type=client_credentials',
-        {
-          headers: {
-            'Authorization': `Basic ${Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64')}`,
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'User-Agent': 'RedCircle/1.0.0'
-          }
-        }
-      );
-
-      this.accessToken = response.data.access_token;
-      this.tokenExpiry = Date.now() + (response.data.expires_in * 1000) - 60000; // Expire 1 minute early
-
-      if (!this.accessToken) {
-        throw new Error('No access token received from Reddit API');
-      }
-
-      return this.accessToken;
-    } catch (error) {
-      console.error('Error getting Reddit access token:', error);
-      throw error;
-    }
+  constructor(userAccessToken: string) {
+    this.userAccessToken = userAccessToken;
   }
 
   private extractPostIdFromUrl(url: string): string | null {
@@ -84,14 +85,15 @@ class RedditAPI {
         throw new Error('Invalid Reddit URL format');
       }
 
-      const accessToken = await this.getAccessToken();
+      if (!this.userAccessToken) {
+        throw new Error('User not authenticated with Reddit');
+      }
       
       const response = await axios.get(`https://oauth.reddit.com/comments/${postId}.json`, {
         headers: {
-          'Authorization': `Bearer ${accessToken}`,
+          'Authorization': `Bearer ${this.userAccessToken}`,
           'User-Agent': 'RedCircle/1.0.0'
         }
-      
       });
 
       const data = response.data;
@@ -109,16 +111,27 @@ class RedditAPI {
   }
 }
 
-const redditAPI = new RedditAPI();
-
 export async function POST(request: NextRequest) {
   try {
+    // Get the user's session
+    const session = await getServerSession(authOptions);
+
+    if (!session) {
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    }
+
+    if (!session.accessToken) {
+      return NextResponse.json({ error: 'No Reddit access token found. Please re-authenticate with Reddit.' }, { status: 401 });
+    }
+
     const { url } = await request.json();
 
     if (!url) {
       return NextResponse.json({ error: 'URL is required' }, { status: 400 });
     }
 
+    // Create Reddit API instance with user's access token
+    const redditAPI = new RedditAPI(session.accessToken);
     const post = await redditAPI.fetchPostByUrl(url);
     
     if (!post) {
@@ -128,6 +141,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ post });
   } catch (error) {
     console.error('Error in Reddit API route:', error);
+    
+    // Handle specific authentication errors
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      return NextResponse.json(
+        { error: 'Reddit authentication expired. Please log in again.' }, 
+        { status: 401 }
+      );
+    }
+    
     return NextResponse.json(
       { error: 'Failed to fetch Reddit post' }, 
       { status: 500 }
